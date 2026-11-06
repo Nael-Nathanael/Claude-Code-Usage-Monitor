@@ -40,7 +40,8 @@ pub(super) fn poll_accounts(
         force,
         |provider, path| match path {
             Some(path) => match provider {
-                ProviderId::Claude => claude::poll_account(path),
+                ProviderId::Claude => crate::limit_files::read_usage(path)
+                    .unwrap_or_else(|| claude::poll_account(path)),
                 ProviderId::Codex => codex::poll_account(path),
                 _ => poll_provider(provider),
             },

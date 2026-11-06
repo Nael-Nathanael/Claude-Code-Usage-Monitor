@@ -10,6 +10,7 @@ mod font_catalog;
 #[cfg(test)]
 mod https_test;
 mod known_folders;
+mod limit_files;
 mod localization;
 mod models;
 mod native_interop;

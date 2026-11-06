@@ -379,6 +379,7 @@ pub fn load_settings() -> SettingsFile {
         .and_then(|content| decode_settings(&content))
         .unwrap_or_default();
     settings.normalize();
+    crate::limit_files::sync_accounts(&mut settings.accounts.claude);
     settings
 }
 

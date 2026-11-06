@@ -1194,45 +1194,65 @@ fn usage_summary_lines(
                 }
             }
         } else {
-            let Some(usage) = data.get(provider) else {
-                continue;
-            };
             let descriptor = provider.descriptor();
-            let weekly_label = usage
-                .weekly_label
-                .as_deref()
-                .unwrap_or(strings.weekly_window);
-            let session_label = usage
-                .session_label
-                .as_deref()
-                .unwrap_or(strings.session_window);
-            let label = match data.selected_account_name(provider) {
-                Some(name) => format!("{} ({name})", language.text(descriptor.display_name)),
-                None => language.text(descriptor.display_name).to_string(),
-            };
-            if provider == ProviderId::Claude && !usage.session.available {
+            let display_name = language.text(descriptor.display_name);
+            let accounts: Vec<_> = data
+                .accounts
+                .iter()
+                .filter(|account| account.provider == provider)
+                .filter_map(|account| {
+                    Some((account.profile.name.as_str(), account.usage.as_ref()?))
+                })
+                .collect();
+            let rows: Vec<(String, &crate::models::UsageData)> =
+                if provider == ProviderId::Claude && accounts.len() > 1 {
+                    accounts
+                        .into_iter()
+                        .map(|(name, usage)| (format!("{display_name} ({name})"), usage))
+                        .collect()
+                } else {
+                    let label = match data.selected_account_name(provider) {
+                        Some(name) => format!("{display_name} ({name})"),
+                        None => display_name.to_string(),
+                    };
+                    data.get(provider)
+                        .map(|usage| (label, usage))
+                        .into_iter()
+                        .collect()
+                };
+            for (label, usage) in rows {
+                let weekly_label = usage
+                    .weekly_label
+                    .as_deref()
+                    .unwrap_or(strings.weekly_window);
+                let session_label = usage
+                    .session_label
+                    .as_deref()
+                    .unwrap_or(strings.session_window);
+                if provider == ProviderId::Claude && !usage.session.available {
+                    lines.push(format!(
+                        "{label} {weekly_label}: {}",
+                        window_text(&usage.weekly)
+                    ));
+                    continue;
+                }
                 lines.push(format!(
-                    "{label} {weekly_label}: {}",
-                    window_text(&usage.weekly)
+                    "{} {}: {} | {}: {}",
+                    label,
+                    session_label,
+                    if detailed_at.is_some() {
+                        window_text(&usage.session)
+                    } else {
+                        format!("{:.0}%", shown(usage.session.percentage))
+                    },
+                    weekly_label,
+                    if detailed_at.is_some() {
+                        window_text(&usage.weekly)
+                    } else {
+                        format!("{:.0}%", shown(usage.weekly.percentage))
+                    },
                 ));
-                continue;
             }
-            lines.push(format!(
-                "{} {}: {} | {}: {}",
-                label,
-                session_label,
-                if detailed_at.is_some() {
-                    window_text(&usage.session)
-                } else {
-                    format!("{:.0}%", shown(usage.session.percentage))
-                },
-                weekly_label,
-                if detailed_at.is_some() {
-                    window_text(&usage.weekly)
-                } else {
-                    format!("{:.0}%", shown(usage.weekly.percentage))
-                },
-            ));
         }
     }
     lines
@@ -2643,6 +2663,17 @@ pub fn run() {
         if let Err(error) = crate::dashboard::start_request_listener(controller) {
             diagnose::log_error("dashboard request listener failed", error);
         }
+        if !no_poll {
+            std::thread::spawn(|| loop {
+                std::thread::sleep(crate::limit_files::UPDATE_INTERVAL);
+                let claude_enabled = lock_state()
+                    .as_ref()
+                    .is_some_and(|state| state.providers.contains(ProviderId::Claude));
+                if claude_enabled {
+                    crate::limit_files::update_all(false);
+                }
+            });
+        }
 
         sync_surface_windows();
         native_interop::make_popup(hwnd, false);
@@ -3006,6 +3037,7 @@ fn do_poll_once(hwnd: HWND) {
         state
             .as_mut()
             .map(|state| {
+                crate::limit_files::sync_accounts(&mut state.accounts.claude);
                 (
                     state.providers,
                     state.accounts.clone(),
@@ -3017,6 +3049,9 @@ fn do_poll_once(hwnd: HWND) {
     };
 
     diagnose::log_lazy(|| format!("poll started providers={enabled_providers:?} force={force}"));
+    if enabled_providers.contains(ProviderId::Claude) {
+        crate::limit_files::update_all(force);
+    }
     let result = poller::poll(
         enabled_providers,
         &accounts,
@@ -4098,6 +4133,38 @@ mod tray_usage_summary_tests {
         assert_eq!(
             tray_usage_summary_lines(&data, providers, LanguageId::English, false),
             ["Claude Code 5h: 5% | 30d: 42%"]
+        );
+    }
+
+    #[test]
+    fn claude_summary_lists_every_ccd_profile() {
+        let mut data = AppUsageData::default();
+        for (id, session) in [("default", 10.0), ("ccd_2", 20.0)] {
+            data.accounts.push(crate::models::AccountUsage {
+                provider: ProviderId::Claude,
+                profile: crate::accounts::AccountProfile {
+                    id: id.into(),
+                    name: id.into(),
+                    ..Default::default()
+                },
+                source_signature: String::new(),
+                source_path: None,
+                usage: Some(usage(session, 50.0, None)),
+                error: None,
+                selected: false,
+            });
+        }
+        assert_eq!(
+            tray_usage_summary_lines(
+                &data,
+                ProviderSet::from_enabled([ProviderId::Claude]),
+                LanguageId::English,
+                false
+            ),
+            [
+                "Claude Code (default) 5h: 10% | 7d: 50%",
+                "Claude Code (ccd_2) 5h: 20% | 7d: 50%"
+            ]
         );
     }
 

@@ -90,6 +90,21 @@ Grok Build usage comes from the session the CLI stores in `%USERPROFILE%\.grok\a
 
 GitHub Copilot usage comes from `api.github.com/copilot_internal/user`, the endpoint Copilot's own editors and CLI read. The monitor uses the first GitHub login that endpoint accepts, in this order: the `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN` environment variable, the Copilot CLI login, then the GitHub CLI login, both read from Windows Credential Manager. Copilot spends one premium-request pool per calendar month, so the monitor shows it on the long-window row and leaves the short-window row empty. Metered chat and completion allowances, as on Copilot Free, are available to themes through `copilot.limits.chat` and `copilot.limits.completions`.
 
+### ccd profiles
+
+Every [ccd](https://github.com/Nael-Nathanael/ccd) profile with a Claude login appears as its own account, named `ccd N`. A new profile appears at the next refresh. Hover the widget to see all of them. The taskbar row shows the selected account, and a theme can bind any other through `accounts.claude.ccd_N`.
+
+Each profile has one file, in the same format as [claude-limits-plasmoid](https://github.com/Nael-Nathanael/claude-limits-plasmoid):
+
+```
+%LOCALAPPDATA%\claude-limits\claude-1.json    ~\.claude
+%LOCALAPPDATA%\claude-limits\claude-2.json    ~\.claude-profile-2
+```
+
+A background thread checks the files once a minute and fetches any that is missing, more than 5 minutes old, or older than its login. The widget only reads them. The files hold figures, never tokens, so other tools can read them too.
+
+These profiles never refresh a token. A profile left idle until its token expires keeps its last figures, marked as old, until you run `ccd N` again.
+
 ## Data and privacy
 
 The monitor reads local sign-in credentials for enabled providers and sends usage requests directly to their official services. It has no backend service, collects no telemetry, and does not upload credentials or project files.

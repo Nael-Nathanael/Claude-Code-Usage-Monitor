@@ -82,6 +82,11 @@ pub struct PollFailure {
     pub error: PollError,
 }
 
+/// `None` means the usage endpoint does not serve this account.
+pub fn fetch_claude_usage(token: &str) -> Result<Option<UsageData>, PollError> {
+    claude::try_usage_endpoint(token)
+}
+
 /// Polling and cache readers must agree on all files an account can read.
 pub fn account_source_signature(provider: ProviderId, path: &std::path::Path) -> String {
     match provider {
