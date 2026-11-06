@@ -2264,6 +2264,7 @@ fn starter_tray_icons_follow_enabled_providers() {
 
 #[test]
 fn ccd_pills_give_each_account_a_stable_slot_up_to_the_limit() {
+    ensure_starter_theme().unwrap();
     let mut theme: ThemeDocument = serde_json::from_str(BUILTIN_THEME_SOURCES[3].1).unwrap();
     theme.prepare_runtime();
     let week_left = 3.5 * 86400.0;

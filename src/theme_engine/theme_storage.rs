@@ -311,7 +311,15 @@ pub fn ensure_starter_theme() -> Result<PathBuf, String> {
             crate::app_settings::write_json_atomic(&path, &theme)?;
         }
     }
-    ensure_bundled_editable_themes(&directory, &assets_directory())?;
+    let asset_directory = assets_directory();
+    std::fs::create_dir_all(&asset_directory).map_err(|error| error.to_string())?;
+    for (file_name, source) in BUILTIN_THEME_ASSETS {
+        let path = asset_directory.join(file_name);
+        if !path.exists() {
+            std::fs::write(path, source).map_err(|error| error.to_string())?;
+        }
+    }
+    ensure_bundled_editable_themes(&directory, &asset_directory)?;
     for removed_id in REMOVED_BUILTIN_THEME_IDS {
         let path = directory.join(format!("{removed_id}.json"));
         match std::fs::remove_file(path) {

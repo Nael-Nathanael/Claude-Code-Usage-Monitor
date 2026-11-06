@@ -66,6 +66,12 @@ const BUNDLED_THEME_ASSETS: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// Built-in themes depend on these, so they install on every start.
+const BUILTIN_THEME_ASSETS: &[(&str, &[u8])] = &[(
+    "claude-logo.png",
+    include_bytes!("themes/assets/claude-logo.png"),
+)];
+
 const REMOVED_BUILTIN_THEME_IDS: &[&str] = &[
     "mission-control",
     "neon-reactor",

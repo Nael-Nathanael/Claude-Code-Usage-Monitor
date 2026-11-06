@@ -147,26 +147,29 @@ fn pill_layers(slot: usize) -> Vec<serde_json::Value> {
     );
     let bands = |value: &str| {
         [
-            format!("{value} >= 80"),
-            format!("{value} >= 50 && {value} < 80"),
-            format!("{value} < 50"),
+            // The text is rounded, so its colour must follow the rounded value.
+            format!("{value} >= 79.5"),
+            format!("{value} >= 49.5 && {value} < 79.5"),
+            format!("{value} < 49.5"),
         ]
     };
     let session = format!("{p}.session.percentage");
     let weekly = format!("{p}.weekly.percentage");
     let mut layers = Vec::new();
-    for (mode, mode_when, text, palette) in [
+    for (mode, mode_when, text, pace_text, palette) in [
         (
             "dark",
             "system.dark",
             "#FFFFFF",
+            "#A0A0A0",
             ["#FF6B6B", "#FFD166", "#8CE99A"],
         ),
         (
             "light",
             "(1 - system.dark)",
             "#1B1B1B",
-            ["#C92A2A", "#B35C00", "#2B8A3E"],
+            "#5F5F5F",
+            ["#B82525", "#9C4A00", "#1E7230"],
         ),
     ] {
         for (band, color) in palette.iter().enumerate() {
@@ -233,20 +236,20 @@ fn pill_layers(slot: usize) -> Vec<serde_json::Value> {
             format!(
                 "{mode_when} && {p}.present && !{p}.five_hour.available && !{p}.weekly.available"
             ),
-            (x, "16".into(), PILL_WIDTH - 8),
+            (x, "16".into(), PILL_WIDTH - 30),
             format!("{{{p}.name}} –"),
             "left",
             text,
         ));
+        layers.push(pill_text(
+            format!("pill-{slot}-pace-{mode}"),
+            format!("{mode_when} && {has_week}"),
+            (x, pace_y.clone(), PCT_WIDTH),
+            format!("{{{p}.pace:0}}%"),
+            "right",
+            pace_text,
+        ));
     }
-    layers.push(pill_text(
-        format!("pill-{slot}-pace"),
-        has_week.clone(),
-        (x, pace_y, PCT_WIDTH),
-        format!("{{{p}.pace:0}}%"),
-        "right",
-        "#888888",
-    ));
     layers.push(pill_bar(
         format!("pill-{slot}-pace-bar"),
         has_week.clone(),
@@ -255,14 +258,20 @@ fn pill_layers(slot: usize) -> Vec<serde_json::Value> {
         "#888888",
         serde_json::json!({ "color": "#888888", "opacity": "0.25" }),
     ));
-    layers.push(pill_text(
-        format!("pill-{slot}-logo"),
-        format!("{p}.present"),
-        (x + PILL_WIDTH - 22, top_y, 14),
-        "✻".into(),
-        "right",
-        "#D97757",
-    ));
+    layers.push(serde_json::json!({
+        "id": format!("pill-{slot}-logo"),
+        "name": format!("pill-{slot}-logo"),
+        "render": format!("{p}.present"),
+        "x": (x + PILL_WIDTH - 20).to_string(),
+        "y": format!("if({p}.five_hour.available, 3, if({p}.weekly.available, 10, 17))"),
+        "width": "12",
+        "height": "12",
+        "background": {
+            "type": "image",
+            "path": "assets/claude-logo.png",
+            "fit": "contain"
+        }
+    }));
     // Later layers draw on top: usage must cover the pace bar.
     layers.sort_by_key(|layer| layer["id"].as_str().is_some_and(|id| id.contains("-used-")));
     layers
