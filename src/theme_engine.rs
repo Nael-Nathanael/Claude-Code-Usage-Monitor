@@ -23,6 +23,9 @@ pub const CLASSIC_THEME_ID: &str = "classic-usage-widget";
 pub const COMPACT_FLUENT_QUAD_THEME_ID: &str = "compact-fluent-quad";
 pub const CLASSIC_VERTICAL_THEME_ID: &str = "classic-vertical";
 pub const MINECRAFT_THEME_ID: &str = "theme-minecraft";
+pub const CCD_PILLS_THEME_ID: &str = "ccd-pills";
+/// Keep in sync with `PILL_SLOTS` in build.rs.
+const PILL_SLOTS: usize = 4;
 
 const BUILTIN_THEME_SOURCES: &[(&str, &str)] = &[
     (
@@ -36,6 +39,10 @@ const BUILTIN_THEME_SOURCES: &[(&str, &str)] = &[
     (
         CLASSIC_VERTICAL_THEME_ID,
         include_str!(concat!(env!("OUT_DIR"), "/classic-vertical.json")),
+    ),
+    (
+        CCD_PILLS_THEME_ID,
+        include_str!(concat!(env!("OUT_DIR"), "/ccd-pills.json")),
     ),
 ];
 
@@ -1651,7 +1658,45 @@ impl DataContext {
             context.insert_provider("antigravity.external", None, false, runtime.countdown);
             context.insert_provider("active", None, false, runtime.countdown);
         }
+        context.insert_pills(data, runtime.countdown);
         context
+    }
+
+    /// Stable slots, so a static theme can show accounts it cannot name.
+    fn insert_pills(&mut self, data: Option<&AppUsageData>, countdown: bool) {
+        let mut accounts: Vec<_> = data
+            .into_iter()
+            .flat_map(|data| &data.accounts)
+            .filter(|account| account.provider == ProviderId::Claude)
+            .collect();
+        // Poll results arrive in any order; pills must not swap places.
+        accounts.sort_by_key(|account| {
+            let id = &account.profile.id;
+            (id != "default", id.len(), id.clone())
+        });
+        self.insert("pill.count", accounts.len().min(PILL_SLOTS) as f64);
+        for slot in 0..PILL_SLOTS {
+            let key = format!("pill.{slot}");
+            let account = accounts.get(slot);
+            let usage = account.and_then(|account| account.usage.as_ref());
+            self.insert_provider(&key, usage, false, countdown);
+            self.insert_string(
+                &format!("{key}.name"),
+                account.map_or("", |account| account.profile.name.as_str()),
+            );
+            self.insert(&format!("{key}.present"), account.is_some() as u8 as f64);
+            let old = account.is_some_and(|account| account.error.is_some())
+                || usage.is_some_and(|usage| usage.stale);
+            self.insert(&format!("{key}.old"), old as u8 as f64);
+            // The share of the week gone by: 0 at its start, 100 at the reset.
+            let left = self
+                .get(&format!("{key}.weekly.reset.seconds"))
+                .unwrap_or(0.0);
+            self.insert(
+                &format!("{key}.pace"),
+                (100.0 - left / 6048.0).clamp(0.0, 100.0),
+            );
+        }
     }
 
     fn insert_provider(
@@ -1862,6 +1907,8 @@ impl DataContext {
             ("monthly", monthly_unix, monthly_seconds),
         ] {
             self.insert(&format!("{name}.{window}.reset.unix"), unix);
+            // Resets land at hh:59:59.9; round to the nearest minute.
+            self.insert(&format!("{name}.{window}.reset.rounded"), unix + 30.0);
             self.insert(&format!("{name}.{window}.reset.seconds"), seconds);
             self.insert(&format!("{name}.{window}.reset.minutes"), seconds / 60.0);
             self.insert(&format!("{name}.{window}.reset.hours"), seconds / 3600.0);

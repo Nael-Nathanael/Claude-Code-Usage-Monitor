@@ -58,6 +58,241 @@ fn build_themes() {
         write_if_changed(&output, &minified)
             .unwrap_or_else(|error| panic!("Failed to write {}: {error}", output.display()));
     }
+    let output = output_dir.join("ccd-pills.json");
+    let pills = serde_json::to_vec(&pills_theme()).expect("Failed to encode the pills theme");
+    write_if_changed(&output, &pills)
+        .unwrap_or_else(|error| panic!("Failed to write {}: {error}", output.display()));
+}
+
+/// Keep in sync with `PILL_SLOTS` in src/theme_engine.rs.
+const PILL_SLOTS: usize = 4;
+const PILL_WIDTH: usize = 136;
+const PCT_WIDTH: usize = 32;
+const RESET_X: usize = PCT_WIDTH + 5;
+const ROW_HEIGHT: usize = 14;
+const BAR_HEIGHT: usize = 3;
+
+fn pill_text(
+    id: String,
+    render: String,
+    (x, y, width): (usize, String, usize),
+    template: String,
+    align: &str,
+    color: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": id.clone(),
+        "name": id,
+        "render": render,
+        "x": x.to_string(),
+        "y": y,
+        "width": width.to_string(),
+        "height": ROW_HEIGHT.to_string(),
+        "content": {
+            "type": "text",
+            "template": template,
+            "font_family": "Segoe UI",
+            "font_size": "11",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": align,
+            "color": { "color": color }
+        }
+    })
+}
+
+fn pill_bar(
+    id: String,
+    render: String,
+    (x, y, width): (usize, String, usize),
+    value: String,
+    fill: &str,
+    track: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": id.clone(),
+        "name": id,
+        "render": render,
+        "x": x.to_string(),
+        "y": y,
+        "width": width.to_string(),
+        "height": BAR_HEIGHT.to_string(),
+        "content": {
+            "type": "progress",
+            "value": value,
+            "direction": "left_to_right",
+            "fill": { "color": fill },
+            "track": track,
+            "corner_radius": "1"
+        }
+    })
+}
+
+/// One claude-limits-plasmoid pill per slot: 5h, 7d and safe pace, or 7d and
+/// safe pace on plans with no 5-hour limit. Colours are fixed per layer, so
+/// each severity band and light or dark taskbar gets its own layer.
+fn pill_layers(slot: usize) -> Vec<serde_json::Value> {
+    let p = format!("pill.{slot}");
+    let x = slot * PILL_WIDTH;
+    let reset_width = PILL_WIDTH - RESET_X - 8;
+    let has_five = format!("{p}.present && {p}.five_hour.available");
+    let week_only = format!("{p}.present && !{p}.five_hour.available && {p}.weekly.available");
+    let has_week = format!("{p}.present && {p}.weekly.available");
+    let top_y = format!("if({p}.five_hour.available, 2, 9)");
+    let pace_y = format!("if({p}.five_hour.available, 30, 24)");
+    let bar_y = format!("if({p}.five_hour.available, 36, 30)");
+    let weekly_reset = format!(
+        "{{{p}.weekly.reset.rounded:time_dot}}@{{{p}.weekly.reset.rounded:month_short}} {{{p}.weekly.reset.rounded:day}}"
+    );
+    let bands = |value: &str| {
+        [
+            format!("{value} >= 80"),
+            format!("{value} >= 50 && {value} < 80"),
+            format!("{value} < 50"),
+        ]
+    };
+    let session = format!("{p}.session.percentage");
+    let weekly = format!("{p}.weekly.percentage");
+    let mut layers = Vec::new();
+    for (mode, mode_when, text, palette) in [
+        (
+            "dark",
+            "system.dark",
+            "#FFFFFF",
+            ["#FF6B6B", "#FFD166", "#8CE99A"],
+        ),
+        (
+            "light",
+            "(1 - system.dark)",
+            "#1B1B1B",
+            ["#C92A2A", "#B35C00", "#2B8A3E"],
+        ),
+    ] {
+        for (band, color) in palette.iter().enumerate() {
+            let session_band = &bands(&session)[band];
+            let weekly_band = &bands(&weekly)[band];
+            layers.push(pill_text(
+                format!("pill-{slot}-five-{mode}-{band}"),
+                format!("{mode_when} && {has_five} && {session_band}"),
+                (x, top_y.clone(), PCT_WIDTH),
+                format!("{{{p}.session.display:0}}%"),
+                "right",
+                color,
+            ));
+            layers.push(pill_text(
+                format!("pill-{slot}-week-top-{mode}-{band}"),
+                format!("{mode_when} && {week_only} && {weekly_band}"),
+                (x, top_y.clone(), PCT_WIDTH),
+                format!("{{{p}.weekly.display:0}}%"),
+                "right",
+                color,
+            ));
+            layers.push(pill_text(
+                format!("pill-{slot}-week-{mode}-{band}"),
+                format!("{mode_when} && {has_five} && {weekly_band}"),
+                (x, "16".into(), PCT_WIDTH),
+                format!("{{{p}.weekly.display:0}}%"),
+                "right",
+                color,
+            ));
+            layers.push(pill_bar(
+                format!("pill-{slot}-used-{mode}-{band}"),
+                format!("{mode_when} && {has_week} && {weekly_band}"),
+                (x + RESET_X, bar_y.clone(), reset_width),
+                weekly.clone(),
+                color,
+                serde_json::json!({ "color": "#00000000" }),
+            ));
+        }
+        layers.push(pill_text(
+            format!("pill-{slot}-five-reset-{mode}"),
+            format!("{mode_when} && {has_five}"),
+            (x + RESET_X, top_y.clone(), reset_width),
+            format!("{{{p}.session.reset.rounded:time_dot}}"),
+            "left",
+            text,
+        ));
+        for (name, when, y) in [
+            ("week-top", &week_only, top_y.clone()),
+            ("week", &has_five, "16".to_string()),
+        ] {
+            for (state, old, suffix) in [("fresh", "!", ""), ("old", "", "*")] {
+                layers.push(pill_text(
+                    format!("pill-{slot}-{name}-reset-{state}-{mode}"),
+                    format!("{mode_when} && {when} && {old}{p}.old"),
+                    (x + RESET_X, y.clone(), reset_width),
+                    format!("{weekly_reset}{suffix}"),
+                    "left",
+                    text,
+                ));
+            }
+        }
+        layers.push(pill_text(
+            format!("pill-{slot}-empty-{mode}"),
+            format!(
+                "{mode_when} && {p}.present && !{p}.five_hour.available && !{p}.weekly.available"
+            ),
+            (x, "16".into(), PILL_WIDTH - 8),
+            format!("{{{p}.name}} –"),
+            "left",
+            text,
+        ));
+    }
+    layers.push(pill_text(
+        format!("pill-{slot}-pace"),
+        has_week.clone(),
+        (x, pace_y, PCT_WIDTH),
+        format!("{{{p}.pace:0}}%"),
+        "right",
+        "#888888",
+    ));
+    layers.push(pill_bar(
+        format!("pill-{slot}-pace-bar"),
+        has_week.clone(),
+        (x + RESET_X, bar_y, reset_width),
+        format!("{p}.pace"),
+        "#888888",
+        serde_json::json!({ "color": "#888888", "opacity": "0.25" }),
+    ));
+    layers.push(pill_text(
+        format!("pill-{slot}-logo"),
+        format!("{p}.present"),
+        (x + PILL_WIDTH - 22, top_y, 14),
+        "✻".into(),
+        "right",
+        "#D97757",
+    ));
+    // Later layers draw on top: usage must cover the pace bar.
+    layers.sort_by_key(|layer| layer["id"].as_str().is_some_and(|id| id.contains("-used-")));
+    layers
+}
+
+fn pills_theme() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "id": "ccd-pills",
+        "name": "ccd pills",
+        "surfaces": [{
+            "id": "main",
+            "name": "ccd pills",
+            "tooltip": "usage_summary",
+            "placement": {
+                "reference": { "region": "system_tray", "display": 0 },
+                "nest": "taskbar",
+                "horizontal": "left",
+                "vertical": "bottom",
+                "surface_horizontal": "right",
+                "surface_vertical": "bottom",
+                "offset_x": 0,
+                "offset_y": 0
+            },
+            "width": format!("max(1, pill.count) * {PILL_WIDTH}"),
+            "height": "46",
+            "mouse_events": { "right_click": "show_context_menu(\"classic-v1\")" },
+            "children": (0..PILL_SLOTS).flat_map(pill_layers).collect::<Vec<_>>()
+        }]
+    })
 }
 
 struct LocaleSource {

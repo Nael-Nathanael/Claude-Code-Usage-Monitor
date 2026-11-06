@@ -67,6 +67,7 @@ pub(super) fn format_timestamp(unix: f64, format: &str, context: &DataContext) -
         "time" | "time_short" => time_default(&value, TIME_NOSECONDS, locale),
         "time_seconds" => time_default(&value, TIME_FORMAT_FLAGS(0), locale),
         "time_24" => time_pattern(&value, "HH':'mm", locale),
+        "time_dot" => time_pattern(&value, "HH'.'mm", locale),
         "time_24_seconds" => time_pattern(&value, "HH':'mm':'ss", locale),
         "time_12" => time_pattern(&value, "h':'mm tt", locale),
         "time_12_seconds" => time_pattern(&value, "h':'mm':'ss tt", locale),
@@ -123,6 +124,7 @@ fn is_timestamp_format(format: &str) -> bool {
             | "time_short"
             | "time_seconds"
             | "time_24"
+            | "time_dot"
             | "time_24_seconds"
             | "time_12"
             | "time_12_seconds"

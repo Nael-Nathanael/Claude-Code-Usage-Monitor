@@ -92,7 +92,17 @@ GitHub Copilot usage comes from `api.github.com/copilot_internal/user`, the endp
 
 ### ccd profiles
 
-Every [ccd](https://github.com/Nael-Nathanael/ccd) profile with a Claude login appears as its own account, named `ccd N`. A new profile appears at the next refresh. Hover the widget to see all of them. The taskbar row shows the selected account, and a theme can bind any other through `accounts.claude.ccd_N`.
+Every [ccd](https://github.com/Nael-Nathanael/ccd) profile with a Claude login appears as its own account, named `ccd N`. A new profile appears at the next refresh. Hover the widget to see all of them.
+
+The `ccd pills` theme gives each profile its own pill on the taskbar, up to four, in the style of the plasmoid:
+
+```
+86% 11.00         5-hour usage, resets 11:00
+46% 20.20@Nov 9   weekly usage, resets Nov 9, 20:20
+50% ▬▬▬▬───       safe pace: 50% of the week has passed
+```
+
+Green is under 50%, yellow from 50%, red from 80%. On the bar, grey is time gone and colour is weekly usage. A `*` means the figures are old. Plans with no 5-hour limit drop that line. Set the refresh interval to 1 minute for the pills to follow the files closely; reading them makes no network call.
 
 Each profile has one file, in the same format as [claude-limits-plasmoid](https://github.com/Nael-Nathanael/claude-limits-plasmoid):
 

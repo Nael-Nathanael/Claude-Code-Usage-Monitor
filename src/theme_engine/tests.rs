@@ -871,7 +871,10 @@ fn classic_hover_summary_survives_theme_round_trips_and_is_opt_in() {
 fn built_in_themes_hide_absent_claude_sessions_and_keep_weekly_and_fable_limits() {
     use crate::models::{UsageData, UsageLimit, UsageSection};
 
-    for (_, source) in BUILTIN_THEME_SOURCES {
+    for (_, source) in BUILTIN_THEME_SOURCES
+        .iter()
+        .filter(|(id, _)| *id != CCD_PILLS_THEME_ID)
+    {
         let theme: ThemeDocument = serde_json::from_str(source).unwrap();
         for session_available in [false, true] {
             let usage = AppUsageData::from_iter([(
@@ -2260,11 +2263,69 @@ fn starter_tray_icons_follow_enabled_providers() {
 }
 
 #[test]
+fn ccd_pills_give_each_account_a_stable_slot_up_to_the_limit() {
+    let mut theme: ThemeDocument = serde_json::from_str(BUILTIN_THEME_SOURCES[3].1).unwrap();
+    theme.prepare_runtime();
+    let week_left = 3.5 * 86400.0;
+    let reading = crate::models::UsageData {
+        weekly: crate::models::UsageSection {
+            available: true,
+            percentage: 77.0,
+            resets_at: Some(
+                std::time::SystemTime::now() + std::time::Duration::from_secs_f64(week_left),
+            ),
+        },
+        ..Default::default()
+    };
+    let account = |id: &str| crate::models::AccountUsage {
+        provider: ProviderId::Claude,
+        profile: crate::accounts::AccountProfile {
+            id: id.into(),
+            name: id.into(),
+            ..Default::default()
+        },
+        source_signature: String::new(),
+        source_path: None,
+        usage: Some(reading.clone()),
+        error: None,
+        selected: false,
+    };
+    let runtime = ThemeRuntime::new(true, true, true);
+    let width = |ids: &[&str]| {
+        let mut data = AppUsageData::default();
+        data.accounts.extend(ids.iter().map(|id| account(id)));
+        let rendered = render_theme_surface_with_runtime(&theme, 0, Some(&data), runtime);
+        assert!(rendered.warnings.is_empty(), "{:?}", rendered.warnings);
+        rendered.width
+    };
+    let one = width(&["default"]);
+    assert_eq!(width(&["ccd_2", "default"]), one * 2);
+    assert_eq!(
+        width(&["default", "ccd_2", "ccd_3", "ccd_4", "ccd_5", "ccd_6"]),
+        one * 4
+    );
+
+    let mut data = AppUsageData::default();
+    data.accounts
+        .extend(["ccd_10", "ccd_2", "default"].map(account));
+    let mut context = DataContext::default();
+    context.insert_pills(Some(&data), false);
+    for (slot, name) in ["default", "ccd_2", "ccd_10"].iter().enumerate() {
+        assert_eq!(
+            context.get_string(&format!("pill.{slot}.name")),
+            Some(*name)
+        );
+    }
+    assert_eq!(context.get("pill.3.present"), Some(0.0));
+}
+
+#[test]
 fn built_in_themes_are_valid_and_cannot_be_saved_as_editable_themes() {
-    assert_eq!(BUILTIN_THEME_SOURCES.len(), 3);
+    assert_eq!(BUILTIN_THEME_SOURCES.len(), 4);
     assert_eq!(BUILTIN_THEME_SOURCES[0].0, CLASSIC_THEME_ID);
     assert_eq!(BUILTIN_THEME_SOURCES[1].0, COMPACT_FLUENT_QUAD_THEME_ID);
     assert_eq!(BUILTIN_THEME_SOURCES[2].0, CLASSIC_VERTICAL_THEME_ID);
+    assert_eq!(BUILTIN_THEME_SOURCES[3].0, CCD_PILLS_THEME_ID);
     assert!(REMOVED_BUILTIN_THEME_IDS
         .iter()
         .all(|id| !is_builtin_theme_id(id)));
