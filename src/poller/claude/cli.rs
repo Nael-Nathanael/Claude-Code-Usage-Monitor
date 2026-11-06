@@ -24,24 +24,6 @@ pub(super) fn windows_command(path: &str, directory: &Path, args: &[&str]) -> Co
     command
 }
 
-pub(super) fn wsl_command(distro: &str, args: &[&str]) -> Command {
-    let mut command = Command::new("wsl.exe");
-    command.args([
-        "-d",
-        distro,
-        "--exec",
-        "bash",
-        "-lic",
-        // Resolve and invoke the CLI inside this distribution for both the
-        // version probe and refresh. Positional arguments preserve quoting.
-        r#"export CLAUDE_CONFIG_DIR="$HOME/.claude"; if command -v claude >/dev/null 2>&1; then claude "$@"; elif [ -x "$HOME/.local/bin/claude" ]; then "$HOME/.local/bin/claude" "$@"; else exit 127; fi"#,
-        "claude-code-usage-monitor",
-    ]);
-    command.args(args);
-    configure_command(&mut command);
-    command
-}
-
 fn configure_command(command: &mut Command) {
     command
         .env_remove("CLAUDECODE")

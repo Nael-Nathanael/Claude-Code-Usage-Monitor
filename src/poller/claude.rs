@@ -562,7 +562,10 @@ fn cli_refresh_token(source: &CredentialSource) {
         CredentialSource::DesktopApp(_) => {
             diagnose::log("Claude desktop app refreshes its own token; re-reading the cache")
         }
-        CredentialSource::Wsl { distro } => cli_refresh_wsl_token(distro),
+        // `claude -p .` would spend usage and touch a live session in the distro.
+        CredentialSource::Wsl { .. } => {
+            diagnose::log("WSL Claude Code refreshes its own token; re-reading the file")
+        }
     }
 }
 
@@ -574,16 +577,6 @@ fn cli_refresh_windows_token(directory: &Path) {
     cli::refresh(
         cli::windows_command(&claude_path, directory, &["--version"]),
         cli::windows_command(&claude_path, directory, cli::REFRESH_ARGS),
-    );
-}
-
-fn cli_refresh_wsl_token(distro: &str) {
-    diagnose::log(format!(
-        "checking WSL Claude token refresh support in distro {distro}"
-    ));
-    cli::refresh(
-        cli::wsl_command(distro, &["--version"]),
-        cli::wsl_command(distro, cli::REFRESH_ARGS),
     );
 }
 
@@ -656,6 +649,9 @@ fn read_first_credentials() -> Option<Credentials> {
 }
 
 fn read_windows_credentials(path: &Path) -> Option<Credentials> {
+    if wsl_path_asleep(path) {
+        return None;
+    }
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) => {
@@ -690,6 +686,9 @@ fn read_credentials_from_source(source: &CredentialSource) -> Option<Credentials
 }
 
 fn read_wsl_credentials(distro: &str) -> Option<Credentials> {
+    if !wsl_running() {
+        return None;
+    }
     let output = run_with_timeout(
         Command::new("wsl.exe")
             .arg("-d")
@@ -735,29 +734,30 @@ fn parse_credentials(content: &str, source: CredentialSource) -> Option<Credenti
     })
 }
 
-/// Credential sources, cheapest first. The WSL probe stays lazy so a machine
-/// that resolves a token locally never has to spawn `wsl.exe`.
+/// Credential sources in priority order. The WSL probe stays lazy so a machine
+/// that resolves a token locally never has to spawn `wsl.exe`. A running distro
+/// precedes the desktop caches, or a desktop login would mask it.
 fn credential_sources_in_order() -> impl Iterator<Item = CredentialSource> {
     let explicit = std::env::var_os("CLAUDE_CONFIG_DIR").is_some_and(|value| !value.is_empty());
     windows_credential_source()
         .into_iter()
+        .chain(
+            std::iter::once_with(move || {
+                if explicit {
+                    Vec::new()
+                } else {
+                    running_wsl_distros()
+                }
+            })
+            .flatten()
+            .map(|distro| CredentialSource::Wsl { distro }),
+        )
         .chain(
             (!explicit)
                 .then(claude_desktop::config_paths)
                 .into_iter()
                 .flatten()
                 .map(CredentialSource::DesktopApp),
-        )
-        .chain(
-            std::iter::once_with(move || {
-                if explicit {
-                    Vec::new()
-                } else {
-                    list_wsl_distros()
-                }
-            })
-            .flatten()
-            .map(|distro| CredentialSource::Wsl { distro }),
         )
 }
 
@@ -809,6 +809,9 @@ fn windows_credential_watch_signature(path: &PathBuf) -> String {
 }
 
 fn wsl_credential_watch_signature(distro: &str) -> Option<String> {
+    if !wsl_running() {
+        return None;
+    }
     let output = run_with_timeout(
         Command::new("wsl.exe")
             .arg("-d")
@@ -832,27 +835,52 @@ fn wsl_credential_watch_signature(distro: &str) -> Option<String> {
     Some(format!("wsl:{distro}|{state}"))
 }
 
-fn list_wsl_distros() -> Vec<String> {
-    let output = match run_with_timeout(
+/// The one WSL install this build reads, and its default user.
+pub const WSL_DISTRO: &str = "Ubuntu-26.10";
+const WSL_USER: &str = "nathanael";
+
+/// The distro's home as Windows sees it. Touching it starts a stopped distro,
+/// so gate every access on `wsl_running`.
+pub fn wsl_home() -> PathBuf {
+    PathBuf::from(format!(r"\\wsl.localhost\{WSL_DISTRO}\home\{WSL_USER}"))
+}
+
+pub fn is_wsl_unc(path: &Path) -> bool {
+    let text = path.to_string_lossy().replace('/', "\\").to_lowercase();
+    text.starts_with(r"\\wsl.localhost\") || text.starts_with(r"\\wsl$\")
+}
+
+/// True for a WSL path that cannot be touched without waking the VM.
+pub fn wsl_path_asleep(path: &Path) -> bool {
+    is_wsl_unc(path) && !wsl_running()
+}
+
+/// `wsl.exe -l --running` only asks the WSL service; it never starts a distro.
+pub fn wsl_running() -> bool {
+    run_with_timeout(
         Command::new("wsl.exe")
-            .args(["-l", "-q"])
+            .args(["-l", "--running", "-q"])
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null()),
         Duration::from_secs(5),
-    ) {
-        Some(output) if output.status.success() => output,
-        _ => {
-            diagnose::log("unable to enumerate WSL distros");
-            return Vec::new();
-        }
-    };
-    decode_wsl_text(&output.stdout)
+    )
+    .is_some_and(|output| listing_has_distro(&output.stdout))
+}
+
+fn listing_has_distro(listing: &[u8]) -> bool {
+    decode_wsl_text(listing)
         .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+        .any(|line| line.trim().eq_ignore_ascii_case(WSL_DISTRO))
+}
+
+fn running_wsl_distros() -> Vec<String> {
+    if wsl_running() {
+        vec![WSL_DISTRO.to_string()]
+    } else {
+        diagnose::log("WSL distro is not running; skipping the WSL source");
+        Vec::new()
+    }
 }
 
 fn decode_wsl_text(bytes: &[u8]) -> String {
@@ -1141,6 +1169,27 @@ mod tests {
             }))
             .is_none()
         );
+    }
+
+    #[test]
+    fn only_a_listed_distro_counts_as_running() {
+        let utf16 = |text: &str| {
+            [0xFF, 0xFE]
+                .into_iter()
+                .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
+                .collect::<Vec<u8>>()
+        };
+        assert!(listing_has_distro(&utf16("Ubuntu-26.10\r\n")));
+        assert!(listing_has_distro(&utf16(
+            "docker-desktop\r\nubuntu-26.10\r\n"
+        )));
+        assert!(!listing_has_distro(&utf16("docker-desktop\r\n")));
+        assert!(!listing_has_distro(&utf16(
+            "There are no running distributions.\r\n"
+        )));
+        assert!(!listing_has_distro(b""));
+        assert!(is_wsl_unc(&wsl_home()));
+        assert!(!is_wsl_unc(Path::new("C:\\Users\\Test\\.claude")));
     }
 
     #[test]

@@ -91,6 +91,15 @@ fn discover(home: &Path) -> Vec<Profile> {
     profiles
 }
 
+/// Profiles from every home. A number found in two homes goes to the one with
+/// a login, the Windows home on a tie.
+fn discover_all(homes: &[PathBuf]) -> Vec<Profile> {
+    let mut profiles: Vec<Profile> = homes.iter().flat_map(|home| discover(home)).collect();
+    profiles.sort_by_key(|profile| (profile.number, !profile.dir.join(CREDENTIALS).exists()));
+    profiles.dedup_by_key(|profile| profile.number);
+    profiles
+}
+
 fn profile_number(home: &Path, credentials: &Path) -> Option<u32> {
     let dir = credentials.parent()?;
     if credentials.file_name()? != CREDENTIALS || dir.parent()? != home {
@@ -241,14 +250,37 @@ pub fn update_all(force: bool) {
         return;
     }
     let now = epoch_secs(SystemTime::now());
-    for profile in discover(&home) {
-        if let Err(error) = update_profile(
-            &out,
-            &profile,
-            force,
-            now,
-            crate::poller::fetch_claude_usage,
-        ) {
+    // Listing a WSL home over `\\wsl.localhost` would start a stopped distro.
+    let wsl_up = crate::poller::wsl_running();
+    let mut homes = vec![home];
+    if wsl_up {
+        homes.push(crate::poller::wsl_home());
+    }
+    update_homes(
+        &out,
+        &homes,
+        wsl_up,
+        force,
+        now,
+        crate::poller::fetch_claude_usage,
+    );
+}
+
+fn update_homes(
+    out: &Path,
+    homes: &[PathBuf],
+    wsl_up: bool,
+    force: bool,
+    now: u64,
+    fetch: impl Fn(&str) -> Result<Option<UsageData>, PollError>,
+) {
+    for profile in discover_all(homes) {
+        // With the distro stopped, a missing login proves nothing: its profiles
+        // are just out of sight, and `hidden` would erase their last figures.
+        if !wsl_up && !profile.dir.join(CREDENTIALS).exists() {
+            continue;
+        }
+        if let Err(error) = update_profile(out, &profile, force, now, &fetch) {
             diagnose::log_error("unable to write a claude-limits file", error);
         }
     }
@@ -280,12 +312,16 @@ fn usage_from_file(state: &LimitFile, login_changed: bool) -> Result<UsageData, 
 
 fn read_usage_in(
     out: &Path,
-    home: &Path,
+    homes: &[PathBuf],
     credentials: &Path,
+    asleep: bool,
 ) -> Option<Result<UsageData, PollError>> {
-    let number = profile_number(home, credentials)?;
+    let number = homes
+        .iter()
+        .find_map(|home| profile_number(home, credentials))?;
     // Without a CLI login the account may still have a desktop app login.
-    if !credentials.exists() {
+    // A stopped distro is not touched: its last figures stand.
+    if !asleep && !credentials.exists() {
         return None;
     }
     let Some(state) = read_file(&out.join(file_name(number))) else {
@@ -297,24 +333,32 @@ fn read_usage_in(
     if let Some(error) = &state.error {
         diagnose::log(format!("claude-{number}.json reports: {error}"));
     }
-    let login_changed = modified_secs(credentials).is_some_and(|time| time > state.checked_at);
-    Some(usage_from_file(&state, login_changed))
+    let login_changed =
+        !asleep && modified_secs(credentials).is_some_and(|time| time > state.checked_at);
+    let mut reading = usage_from_file(&state, login_changed);
+    if let (true, Ok(usage)) = (asleep, &mut reading) {
+        usage.stale = true;
+    }
+    Some(reading)
 }
 
 /// The widget's read path. `None` means this login is not a ccd profile.
 pub fn read_usage(credentials: &Path) -> Option<Result<UsageData, PollError>> {
     read_usage_in(
         &output_dir()?,
-        &crate::known_folders::home_dir()?,
+        &[crate::known_folders::home_dir()?, crate::poller::wsl_home()],
         credentials,
+        crate::poller::wsl_path_asleep(credentials),
     )
 }
 
-fn sync_profiles(accounts: &mut ProviderAccounts, found: &[Profile]) {
+fn sync_profiles(accounts: &mut ProviderAccounts, found: &[Profile], wsl_up: bool) {
     let id = |number: u32| format!("{ACCOUNT_PREFIX}{number}");
     accounts.profiles.retain(|profile| {
         !profile.id.starts_with(ACCOUNT_PREFIX)
             || found.iter().any(|found| id(found.number) == profile.id)
+            // A stopped distro's profiles are not listed, not gone.
+            || (!wsl_up && crate::poller::is_wsl_unc(Path::new(&profile.config_dir)))
     });
     // API-key profiles have no login file, so they have no quota to show.
     for found in found
@@ -341,7 +385,12 @@ fn sync_profiles(accounts: &mut ProviderAccounts, found: &[Profile]) {
 /// Keep one account per ccd profile. A profile the user disabled stays disabled.
 pub fn sync_accounts(accounts: &mut ProviderAccounts) {
     if let Some(home) = crate::known_folders::home_dir() {
-        sync_profiles(accounts, &discover(&home));
+        let wsl_up = crate::poller::wsl_running();
+        let mut homes = vec![home];
+        if wsl_up {
+            homes.push(crate::poller::wsl_home());
+        }
+        sync_profiles(accounts, &discover_all(&homes), wsl_up);
     }
 }
 
@@ -539,9 +588,68 @@ mod tests {
     fn missing_login_falls_through_to_the_desktop_app_path() {
         let root = tempfile::tempdir().unwrap();
         let credentials = root.path().join(".claude").join(CREDENTIALS);
-        assert!(read_usage_in(root.path(), root.path(), &credentials).is_none());
+        let homes = [root.path().to_path_buf()];
+        assert!(read_usage_in(root.path(), &homes, &credentials, false).is_none());
         let other = root.path().join("elsewhere").join(CREDENTIALS);
-        assert!(read_usage_in(root.path(), root.path(), &other).is_none());
+        assert!(read_usage_in(root.path(), &homes, &other, false).is_none());
+    }
+
+    #[test]
+    fn stopped_wsl_keeps_files_and_writes_no_hidden() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let out = root.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let saved = LimitFile {
+            five_hour: Some(LimitWindow {
+                used_percentage: 40.0,
+                resets_at: None,
+            }),
+            saved_at: NOW,
+            checked_at: NOW,
+            ..Default::default()
+        };
+        write_file(&out.join("claude-1.json"), &saved).unwrap();
+        let homes = [home];
+        let no_fetch = |_: &str| -> Result<Option<UsageData>, PollError> { panic!("no login") };
+        update_homes(&out, &homes, false, true, NOW + 1, no_fetch);
+        assert_eq!(read_file(&out.join("claude-1.json")).unwrap(), saved);
+        update_homes(&out, &homes, true, true, NOW + 1, no_fetch);
+        assert!(read_file(&out.join("claude-1.json")).unwrap().hidden);
+    }
+
+    #[test]
+    fn stopped_wsl_reads_last_figures_without_touching_the_login() {
+        let root = tempfile::tempdir().unwrap();
+        let wsl_home = root.path().join("wsl");
+        let credentials = wsl_home.join(".claude-profile-2").join(CREDENTIALS);
+        let saved = LimitFile {
+            five_hour: Some(LimitWindow {
+                used_percentage: 40.0,
+                resets_at: None,
+            }),
+            ..Default::default()
+        };
+        write_file(&root.path().join("claude-2.json"), &saved).unwrap();
+        let homes = [root.path().join("win"), wsl_home];
+        assert!(read_usage_in(root.path(), &homes, &credentials, false).is_none());
+        let reading = read_usage_in(root.path(), &homes, &credentials, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reading.session.percentage, 40.0);
+        assert!(reading.stale);
+    }
+
+    #[test]
+    fn a_number_in_two_homes_goes_to_the_one_with_a_login() {
+        let root = tempfile::tempdir().unwrap();
+        let (win, wsl) = (root.path().join("win"), root.path().join("wsl"));
+        std::fs::create_dir_all(win.join(".claude")).unwrap();
+        login(&wsl.join(".claude"), 0);
+        let found = discover_all(&[win, wsl.clone()]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].dir, wsl.join(".claude"));
     }
 
     #[test]
@@ -555,13 +663,13 @@ mod tests {
         login(&two.dir, 0);
         std::fs::create_dir(&three.dir).unwrap();
         let mut accounts = ProviderAccounts::default();
-        sync_profiles(&mut accounts, &[two.clone(), three]);
+        sync_profiles(&mut accounts, &[two.clone(), three], true);
         let ids: Vec<_> = accounts.profiles.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, ["default", "ccd_2"]);
         accounts.profiles[1].enabled = false;
-        sync_profiles(&mut accounts, std::slice::from_ref(&two));
+        sync_profiles(&mut accounts, std::slice::from_ref(&two), true);
         assert!(!accounts.profiles[1].enabled);
-        sync_profiles(&mut accounts, &[]);
+        sync_profiles(&mut accounts, &[], true);
         assert_eq!(accounts.profiles.len(), 1);
     }
 }

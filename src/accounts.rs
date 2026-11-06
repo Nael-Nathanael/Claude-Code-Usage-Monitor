@@ -14,7 +14,12 @@ pub fn fingerprint(value: &str) -> String {
 }
 
 pub fn file_signature(path: &Path) -> String {
-    let metadata = std::fs::metadata(path).ok();
+    // Stat on a stopped WSL path would start the VM.
+    let metadata = if crate::poller::wsl_path_asleep(path) {
+        None
+    } else {
+        std::fs::metadata(path).ok()
+    };
     fingerprint(&format!(
         "{}|{:?}|{:?}",
         source_key(path),
@@ -24,6 +29,9 @@ pub fn file_signature(path: &Path) -> String {
 }
 
 pub fn source_key(path: &Path) -> String {
+    if crate::poller::wsl_path_asleep(path) {
+        return path.to_string_lossy().to_lowercase();
+    }
     match std::fs::canonicalize(path) {
         Ok(path) => path.to_string_lossy().into_owned(),
         Err(_) => path.to_string_lossy().to_lowercase(),

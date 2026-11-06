@@ -295,6 +295,7 @@ mod opencode;
 mod retry_after;
 mod windows_credentials;
 
+pub use claude::{is_wsl_unc, wsl_home, wsl_path_asleep, wsl_running};
 pub use retry_after::retry_delay_ms;
 
 struct ProviderPoller {
