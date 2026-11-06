@@ -1688,7 +1688,7 @@ impl DataContext {
             self.insert_provider(&key, usage, false, countdown);
             self.insert_string(
                 &format!("{key}.name"),
-                account.map_or("", |account| account.profile.name.as_str()),
+                account.map_or(String::new(), |account| account.profile.claude_label()),
             );
             self.insert(&format!("{key}.present"), account.is_some() as u8 as f64);
             let old = account.is_some_and(|account| account.error.is_some())

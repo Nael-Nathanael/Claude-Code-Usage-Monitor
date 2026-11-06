@@ -2311,7 +2311,7 @@ fn ccd_pills_give_each_account_a_stable_slot_up_to_the_limit() {
         .extend(["ccd_10", "ccd_2", "default"].map(account));
     let mut context = DataContext::default();
     context.insert_pills(Some(&data), false);
-    for (slot, name) in ["default", "ccd_2", "ccd_10"].iter().enumerate() {
+    for (slot, name) in ["default", "P2", "P10"].iter().enumerate() {
         assert_eq!(
             context.get_string(&format!("pill.{slot}.name")),
             Some(*name)

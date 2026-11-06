@@ -222,6 +222,17 @@ pub fn expand_path(path: &Path) -> Option<PathBuf> {
 }
 
 impl AccountProfile {
+    /// Claude pills and hover rows: P1 for the default login, PN for ccd N.
+    pub fn claude_label(&self) -> String {
+        if let Some(number) = self.id.strip_prefix(crate::limit_files::ACCOUNT_PREFIX) {
+            format!("P{number}")
+        } else if self.id == "default" && self.name == "Default" {
+            "P1".into()
+        } else {
+            self.name.clone()
+        }
+    }
+
     pub fn same_source(&self, other: &Self) -> bool {
         self.id == other.id
             && self.config_dir == other.config_dir

@@ -15,8 +15,9 @@ use crate::poller::PollError;
 
 const MAX_AGE_SECS: u64 = 300;
 pub const UPDATE_INTERVAL: Duration = Duration::from_secs(60);
-const ACCOUNT_PREFIX: &str = "ccd_";
+pub const ACCOUNT_PREFIX: &str = "ccd_";
 const PROFILE_PREFIX: &str = ".claude-profile-";
+const API_KEY: &str = "ccd.key";
 const CREDENTIALS: &str = ".credentials.json";
 const EXPIRED: &str = "token expired";
 
@@ -87,6 +88,8 @@ fn discover(home: &Path) -> Vec<Profile> {
             dir: entry.path(),
         })
     }));
+    // API-key profiles have no subscription quota: no account, no quota file.
+    profiles.retain(|profile| !profile.dir.join(API_KEY).exists());
     profiles.sort_by_key(|profile| profile.number);
     profiles
 }
@@ -592,6 +595,23 @@ mod tests {
         assert!(read_usage_in(root.path(), &homes, &credentials, false).is_none());
         let other = root.path().join("elsewhere").join(CREDENTIALS);
         assert!(read_usage_in(root.path(), &homes, &other, false).is_none());
+    }
+
+    #[test]
+    fn api_key_profiles_get_no_account_and_no_quota_file() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        login(&home.join(".claude-profile-2"), 0);
+        std::fs::create_dir_all(home.join(".claude-profile-5")).unwrap();
+        std::fs::write(home.join(".claude-profile-5").join(API_KEY), "key").unwrap();
+        let out = root.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let homes = [home];
+        let numbers: Vec<_> = discover_all(&homes).iter().map(|p| p.number).collect();
+        assert_eq!(numbers, [1, 2]);
+        update_homes(&out, &homes, true, true, NOW, |_| Ok(Some(usage(1.0))));
+        assert!(out.join("claude-2.json").exists());
+        assert!(!out.join("claude-5.json").exists());
     }
 
     #[test]

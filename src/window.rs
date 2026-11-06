@@ -1201,7 +1201,7 @@ fn usage_summary_lines(
                 .iter()
                 .filter(|account| account.provider == provider)
                 .filter_map(|account| {
-                    Some((account.profile.name.as_str(), account.usage.as_ref()?))
+                    Some((account.profile.claude_label(), account.usage.as_ref()?))
                 })
                 .collect();
             let rows: Vec<(String, &crate::models::UsageData)> =
@@ -4163,7 +4163,7 @@ mod tray_usage_summary_tests {
             ),
             [
                 "Claude Code (default) 5h: 10% | 7d: 50%",
-                "Claude Code (ccd_2) 5h: 20% | 7d: 50%"
+                "Claude Code (P2) 5h: 20% | 7d: 50%"
             ]
         );
     }
