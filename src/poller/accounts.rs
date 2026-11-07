@@ -92,15 +92,21 @@ where
     for provider in enabled.iter() {
         if let Some(accounts) = settings.get(provider) {
             for profile in accounts.profiles.iter().filter(|profile| profile.enabled) {
-                let path = profile.credential_path(provider).map(|path| {
-                    path.or_else(|| match provider {
-                        ProviderId::Codex => codex::codex_auth_path(),
-                        ProviderId::Claude => crate::accounts::environment_directory(provider)
-                            .map(|directory| directory.join(".credentials.json"))
-                            .or_else(claude::native_credential_path),
-                        _ => None,
-                    })
-                });
+                let quota_file = (provider == ProviderId::Claude)
+                    .then(|| crate::limit_files::file_for(profile))
+                    .flatten();
+                let path = match quota_file {
+                    Some(file) => Ok(Some(file)),
+                    None => profile.credential_path(provider).map(|path| {
+                        path.or_else(|| match provider {
+                            ProviderId::Codex => codex::codex_auth_path(),
+                            ProviderId::Claude => crate::accounts::environment_directory(provider)
+                                .map(|directory| directory.join(".credentials.json"))
+                                .or_else(claude::native_credential_path),
+                            _ => None,
+                        })
+                    }),
+                };
                 targets.push(Target {
                     provider,
                     profile: Some(profile.clone()),

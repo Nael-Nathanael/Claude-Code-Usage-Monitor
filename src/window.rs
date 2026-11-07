@@ -2664,15 +2664,8 @@ pub fn run() {
             diagnose::log_error("dashboard request listener failed", error);
         }
         if !no_poll {
-            std::thread::spawn(|| loop {
-                std::thread::sleep(crate::limit_files::UPDATE_INTERVAL);
-                let claude_enabled = lock_state()
-                    .as_ref()
-                    .is_some_and(|state| state.providers.contains(ProviderId::Claude));
-                if claude_enabled {
-                    crate::limit_files::update_all(false);
-                }
-            });
+            let send_hwnd = SendHwnd::from_hwnd(hwnd);
+            crate::limit_files::watch(move || request_poll(send_hwnd.to_hwnd()));
         }
 
         sync_surface_windows();
@@ -3049,9 +3042,6 @@ fn do_poll_once(hwnd: HWND) {
     };
 
     diagnose::log_lazy(|| format!("poll started providers={enabled_providers:?} force={force}"));
-    if enabled_providers.contains(ProviderId::Claude) {
-        crate::limit_files::update_all(force);
-    }
     let result = poller::poll(
         enabled_providers,
         &accounts,

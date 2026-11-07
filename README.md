@@ -102,18 +102,18 @@ The `ccd pills` theme gives each profile its own pill on the taskbar, up to four
 50% ▬▬▬▬───       safe pace: 50% of the week has passed
 ```
 
-Green is under 50%, yellow from 50%, red from 80%. On the bar, grey is time gone and colour is weekly usage. A `*` means the figures are old. Plans with no 5-hour limit drop that line. Set the refresh interval to 1 minute for the pills to follow the files closely; reading them makes no network call.
+Green is under 50%, yellow from 50%, red from 80%. On the bar, grey is time gone and colour is weekly usage. A `*` means the service reported an error or the figures are over 15 minutes old. Plans with no 5-hour limit drop that line. The pills update as soon as a file changes, whatever the refresh interval.
 
 Each profile has one file, in the same format as [claude-limits-plasmoid](https://github.com/Nael-Nathanael/claude-limits-plasmoid):
 
 ```
-%LOCALAPPDATA%\claude-limits\claude-1.json    ~\.claude
-%LOCALAPPDATA%\claude-limits\claude-2.json    ~\.claude-profile-2
+%LOCALAPPDATA%\claude-limits\claude-1.json    WSL ~/.claude
+%LOCALAPPDATA%\claude-limits\claude-2.json    WSL ~/.claude-profile-2
 ```
 
-A background thread checks the files once a minute and fetches any that is missing, more than 5 minutes old, or older than its login. The widget only reads them. The files hold figures, never tokens, so other tools can read them too.
+WSL writes these files: the Claude Code statusline on each reply, and the claude-limits service for idle profiles, which also renews expired logins. In WSL, link `~/.cache/claude-limits` to this folder. The widget only watches and reads them, so it touches no login and no network for these profiles, and never wakes WSL. The files hold figures, never tokens.
 
-These profiles never refresh a token. A profile left idle until its token expires keeps its last figures, marked as old, until you run `ccd N` again.
+While WSL is stopped nothing writes the files, so the pills turn old after 15 minutes.
 
 ## Data and privacy
 
